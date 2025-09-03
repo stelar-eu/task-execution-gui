@@ -1,0 +1,10 @@
+{
+  "ToolA": {
+    "inputs": ["input_file", "config_path"],
+    "parameters": ["param1", "param2"]
+  },
+  "ToolB": {
+    "inputs": ["dataset_id"],
+    "parameters": ["threshold", "mode"]
+  }
+}

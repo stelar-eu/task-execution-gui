@@ -102,7 +102,7 @@ Tool configurations are defined in `utils/tool_configs.py` and include:
 - Parameter configurations
 - S3 storage paths
 
-## Project Structure
+<!-- ## Project Structure
 
 ```
 task-execution-gui/
@@ -126,7 +126,7 @@ task-execution-gui/
     ├── Datasets.py           # Dataset browser and selection
     ├── S3.py                 # S3 storage interface
     └── Tools.py              # Tool selection and execution
-```
+``` -->
 
 ## Usage Guide
 

@@ -9,6 +9,13 @@ if "authenticated" not in st.session_state:
     st.session_state.authenticated = False
 
 
+def display_header():
+    """Display the STELAR logo as header"""
+    col1, col2, col3 = st.columns([1, 1, 1])
+    with col1:
+        st.image("Logo - Stelar project.png", width=200)
+
+
 def create_navigation():
     """Create a custom navigation bar"""
     st.markdown(
@@ -76,12 +83,17 @@ def create_navigation():
 
 def main():
     st.set_page_config(
-        page_title="STELAR Task Executor", initial_sidebar_state="collapsed", layout="wide"
+        page_title="STELAR Task Executor", 
+        initial_sidebar_state="collapsed", 
+        layout="wide"
     )
 
     if not st.session_state.authenticated:
         login_user()
     else:
+        # Display logo header
+        display_header()
+        
         # Create navigation bar
         current_page = create_navigation()
 

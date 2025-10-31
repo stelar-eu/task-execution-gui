@@ -2,23 +2,24 @@ import streamlit as st
 import pandas as pd
 from utils.fetch_datasets import fetch_datasets
 from concurrent.futures import ThreadPoolExecutor, as_completed
+import time
 
 
 @st.cache_data(show_spinner=False)
-def get_process_data(token, limit=750, offset=0):
+def get_process_data(token, limit=100, offset=0):
     """
-    Dataset loading with concurrent strategy and fixed parameters.
+    Dataset loading with concurrent strategy and configurable parameters.
     
     Parameters:
         token (str): Bearer token for authentication
-        limit (int): Number of datasets per request (default: 750)
+        limit (int): Number of datasets per request (default: 100)
         offset (int): Starting position in dataset (default: 0)
     
     Returns:
         tuple: (pd.DataFrame, dict) - DataFrame and metadata
     """
     try:
-        # Load 3 batches concurrently
+        # Load 3 batches concurrently with smaller batch size
         batches_to_load = 3
         all_results = []
         total_count = 0
@@ -43,6 +44,7 @@ def get_process_data(token, limit=750, offset=0):
                         total_count = batch_data.get("total", 0) or batch_data.get("count", 0)
                 except Exception as e:
                     st.warning(f"Failed to fetch batch {futures[future]}: {e}")
+                    # Continue with other batches even if one fails
             
             # Combine results in order
             for i in range(batches_to_load):
@@ -51,7 +53,7 @@ def get_process_data(token, limit=750, offset=0):
         
         data = {"result": all_results, "total": total_count}
         
-        if not data or "result" not in data:
+        if not data or "result" not in data or not all_results:
             return pd.DataFrame(), {"total": 0, "loaded": 0, "offset": offset}
 
         df = pd.DataFrame(data["result"])
@@ -83,7 +85,57 @@ def get_process_data(token, limit=750, offset=0):
         return pd.DataFrame(), {"total": 0, "loaded": 0, "offset": offset}
 
 
-def load_more_datasets(token, current_offset, limit=750):
+@st.cache_data(show_spinner=False)
+def get_process_data_single(token, limit=100, offset=0):
+    """
+    Fallback: Single request strategy for when concurrent requests fail.
+    
+    Parameters:
+        token (str): Bearer token for authentication
+        limit (int): Number of datasets per request
+        offset (int): Starting position in dataset
+    
+    Returns:
+        tuple: (pd.DataFrame, dict) - DataFrame and metadata
+    """
+    try:
+        data = fetch_datasets(token, limit=limit, offset=offset)
+        
+        if not data or "result" not in data:
+            return pd.DataFrame(), {"total": 0, "loaded": 0, "offset": offset}
+
+        df = pd.DataFrame(data.get("result", []))
+        
+        # Process organization columns
+        if not df.empty and "organization" in df.columns:
+            df["organization_name"] = df["organization"].apply(
+                lambda x: x.get("name") if x is not None else None
+            )
+            df["organization_title"] = df["organization"].apply(
+                lambda x: x.get("title") if x is not None else None
+            )
+        elif not df.empty:
+            df["organization_name"] = None
+            df["organization_title"] = None
+
+        total_count = data.get("total", 0) or data.get("count", 0)
+        
+        metadata = {
+            "total": total_count,
+            "loaded": len(df),
+            "offset": offset,
+            "limit": limit,
+            "has_more": len(df) == limit and (offset + len(df)) < total_count
+        }
+        
+        return df, metadata
+        
+    except Exception as e:
+        st.error(f"Error fetching datasets: {e}")
+        return pd.DataFrame(), {"total": 0, "loaded": 0, "offset": offset}
+
+
+def load_more_datasets(token, current_offset, limit=100):
     """Load next batch of datasets"""
     try:
         data = fetch_datasets(token, limit=limit, offset=current_offset)
@@ -110,6 +162,7 @@ def load_more_datasets(token, current_offset, limit=750):
 def refresh_cached_data():
     """Clear the cache and force data refresh"""
     get_process_data.clear()
+    get_process_data_single.clear()
     st.rerun()
 
 
@@ -246,22 +299,45 @@ def run():
         st.error("Authentication token not found. Please log in.")
         return
 
-    # Initialize session state for pagination with fixed parameters
+    # Initialize session state for pagination
     if "dataset_offset" not in st.session_state:
         st.session_state.dataset_offset = 0
     
-    # Fixed parameters: concurrent strategy, 750 items per batch
-    limit = 750
-    # Fetch data with concurrent strategy and 750 items per batch
+    if "use_concurrent" not in st.session_state:
+        st.session_state.use_concurrent = True
+    
+    # Reduced limit to avoid server overload
+    limit = 100
+    
+    # Fetch data with error handling
     with st.spinner("Loading datasets..."):
-        df, metadata = get_process_data(
-            token, 
-            limit=limit,
-            offset=st.session_state.dataset_offset
-        )
+        if st.session_state.use_concurrent:
+            df, metadata = get_process_data(
+                token, 
+                limit=limit,
+                offset=st.session_state.dataset_offset
+            )
+            
+            # If concurrent loading fails, fall back to single request
+            if df.empty and metadata['total'] == 0:
+                st.warning("Concurrent loading failed. Trying single request...")
+                st.session_state.use_concurrent = False
+                df, metadata = get_process_data_single(
+                    token,
+                    limit=limit,
+                    offset=st.session_state.dataset_offset
+                )
+        else:
+            df, metadata = get_process_data_single(
+                token,
+                limit=limit,
+                offset=st.session_state.dataset_offset
+            )
 
     if df.empty:
-        st.warning("No datasets available.")
+        st.error("No datasets available. The server may be experiencing issues.")
+        if st.button("🔄 Retry"):
+            refresh_cached_data()
         return
 
     # Initialize session state for filters and columns
@@ -330,6 +406,9 @@ def run():
         if total_loaded > 0:
             st.progress(ratio, text=f"{ratio:.1%} of loaded")
 
+    # Calculate max pages based on total and limit
+    max_pages = min((metadata['total'] // limit) + 1, 50) if metadata['total'] > 0 else 5
+
     # Page slider and refresh button
     col1, col2 = st.columns([4, 1])
     
@@ -338,10 +417,10 @@ def run():
         page_number = st.slider(
             "Navigate to page:",
             min_value=1,
-            max_value=5,
+            max_value=max_pages,
             value=current_page,
             step=1,
-            help="Navigate through the first 5 pages (up to 3,750 datasets)"
+            help=f"Navigate through pages ({limit} datasets per page)"
         )
         
         # Update offset based on page selection
@@ -349,9 +428,15 @@ def run():
         if new_offset != st.session_state.dataset_offset:
             st.session_state.dataset_offset = new_offset
             get_process_data.clear()
+            get_process_data_single.clear()
+            st.rerun()
+
+    with col2:
+        if st.button("🔄 Refresh", help="Clear cache and reload data"):
+            refresh_cached_data()
 
     # Display dataset information
-    col1, col2 = st.columns(2)
+    col1, col2, col3 = st.columns(3)
     
     with col1:
         start_idx = st.session_state.dataset_offset + 1
@@ -359,7 +444,10 @@ def run():
         st.metric("Showing", f"{start_idx:,} - {end_idx:,}")
     
     with col2:
-        st.metric("Page", f"{page_number} / 5")
+        st.metric("Page", f"{page_number} / {max_pages}")
+    
+    with col3:
+        st.metric("Total Available", f"{metadata['total']:,}")
 
     # Progress indicator
     if metadata['total'] > 0:
@@ -377,7 +465,7 @@ def run():
             display_df,
             use_container_width=True,
             hide_index=True,
-            key=f"dataset_dataframe_selection_{st.session_state.dataset_offset}",  # Unique key per offset
+            key=f"dataset_dataframe_selection_{st.session_state.dataset_offset}",
             on_select="rerun",
             selection_mode="multi-row",
         )

@@ -6,6 +6,8 @@ from utils.fetch_tools import fetch_tools
 from utils.fetch_task_by_id import fetch_task_by_id
 from utils.fetch_organization import fetch_organization
 from utils.create_new_dataset import create_new_ds
+from utils.execute_task import execute_task
+
 
 from pages import Workflow, Datasets, S3
 from utils.tool_configs import get_tool_config
@@ -232,14 +234,14 @@ def create_task_config_agri_products(task_name, selected_mode, task_pid, input_d
             "name": task_name,
             "image": "petroud/agri-products-match:latest",
             "inputs": {
-                "npk_values": input_datasets[0] if len(input_datasets) > 0 else [],
-                "fertilizer_dataset": input_datasets[1] if len(input_datasets) > 1 else [],
+                "npk_values": [input_datasets[0]] if len(input_datasets) > 0 else [],
+                "fertilizer_dataset": [input_datasets[1]] if len(input_datasets) > 1 else [],
             },
             "datasets": {"d0": output_dataset},
             "parameters": {"mode": "fertilizers"},
             "outputs": {
                 "matched_fertilizers": {
-                    "url": f"s3://{s3_path_final}{filename}",
+                    "url": f"s3://{s3_path_final}/{filename}" if not s3_path_final.endswith('/') else f"s3://{s3_path_final}{filename}",
                     "dataset": "d0",
                     "resource": {
                         "name": "Matched Fertilizers based on NPK values",
@@ -254,18 +256,18 @@ def create_task_config_agri_products(task_name, selected_mode, task_pid, input_d
             "name": task_name,
             "image": "petroud/agri-products-match:latest",
             "inputs": {
-                "active_substances": input_datasets[0] if len(input_datasets) > 0 else [],
-                "pesticides_dataset": input_datasets[1] if len(input_datasets) > 1 else [],
+                "active_substances": [input_datasets[0]] if len(input_datasets) > 0 else [],
+                "pesticides_dataset": [input_datasets[1]] if len(input_datasets) > 1 else [],
             },
             "datasets": {"d0": output_dataset},
             "parameters": {
                 "mode": "pesticides",
-                "input_language": additional_params.get("input_language", "italiano"),
-                "db_language": additional_params.get("db_language", "italiano")
+                "input_language": additional_params.get("input_language", "italiano") if additional_params else "italiano",
+                "db_language": additional_params.get("db_language", "italiano") if additional_params else "italiano"
             },
             "outputs": {
                 "matched_products": {
-                    "url": f"s3://{s3_path_final}{filename}",
+                    "url": f"s3://{s3_path_final}/{filename}" if not s3_path_final.endswith('/') else f"s3://{s3_path_final}{filename}",
                     "dataset": "d0",
                     "resource": {
                         "name": "Matched Pesticides based on active substances values",
@@ -276,7 +278,6 @@ def create_task_config_agri_products(task_name, selected_mode, task_pid, input_d
         }
     
     return config
-
 
 def create_task_config_mdi(task_name, task_pid, input_datasets, output_dataset, s3_path_final, filename, proc_id=None, ds_ids=None):
     """Create task configuration JSON for missing-data-interpolation tool"""
@@ -294,14 +295,14 @@ def create_task_config_mdi(task_name, task_pid, input_datasets, output_dataset, 
         "name": task_name,
         "image": "petroud/mdi:latest",
         "inputs": {
-            "meteo_file": input_datasets[0] if len(input_datasets) > 0 else [],
-            "coords_file": input_datasets[1] if len(input_datasets) > 1 else [],
+            "meteo_file": [input_datasets[0]] if len(input_datasets) > 0 else [],
+            "coords_file": [input_datasets[1]] if len(input_datasets) > 1 else [],
         },
         "datasets": {"d0": output_dataset},
         "parameters": {},
         "outputs": {
             "interpolated_file": {
-                "url": f"s3://{s3_path_final}{filename}",
+                "url": f"s3://{s3_path_final}/{filename}" if not s3_path_final.endswith('/') else f"s3://{s3_path_final}{filename}",
                 "dataset": "d0",
                 "resource": {
                     "name": "Interpolated Meteo Station Data",
@@ -310,7 +311,6 @@ def create_task_config_mdi(task_name, task_pid, input_datasets, output_dataset, 
             }
         }
     }
-
 
 def create_task_config_vsr(task_name, task_pid, input_datasets, output_dataset, s3_path_final, filename, proc_id=None, ds_ids=None, raster_params=None, dataset_config=None):
     """Create task configuration JSON for VSR tool with enhanced parameter handling"""
@@ -383,7 +383,7 @@ def create_task_config_vsr(task_name, task_pid, input_datasets, output_dataset, 
         "parameters": processed_params,
         "outputs": {
             "scored_files": {
-                "url": f"s3://{s3_path_final}output" if not filename else f"s3://{s3_path_final}{filename}",
+                "url": f"s3://{s3_path_final}/output" if not filename else (f"s3://{s3_path_final}/{filename}" if not s3_path_final.endswith('/') else f"s3://{s3_path_final}{filename}"),
                 "dataset": "d1",
                 "resource": {
                     "name": "Scored Classified rasters via VSR",
@@ -528,6 +528,8 @@ def get_input_labels(tool_name, selected_mode=None):
     return labels.get(tool_key, {}).get(mode_key, ["Input Dataset 1", "Input Dataset 2"])
 
 
+
+
 def handle_task_execution(task_execution, tool_name, selected_mode, proc_id, proc_name, ds_id, s3_path, tasks, token, owner_org):
     """Handle task execution logic"""
     if task_execution == "Create New Task":
@@ -651,46 +653,153 @@ def handle_task_execution(task_execution, tool_name, selected_mode, proc_id, pro
         additional_params = render_tool_parameters(tool_name, selected_mode)
         
         # Execute task
-        if st.button("Execute Task", key="execute_task_button"):
-            # Validate required fields based on tool requirements
-            required_fields = [task_name, task_pid, s3_path_final, filename]
-            required_fields.extend(input_datasets)
-            required_fields.append(output_dataset)
-            
-            invalid_values = ["Select Output Dataset", "Select S3 Path", "No Process Selected", "No Dataset Selected", "", None]
-            
-            if all(field not in invalid_values for field in required_fields):
-                # Create configuration based on tool type
+        col1, col2 = st.columns([3, 1])
+        
+        with col1:
+            if st.button("🚀 Execute Task", key="execute_task_button", type="primary", use_container_width=True):
+                # Validate required fields based on tool requirements
+                required_fields = [task_name, task_pid, s3_path_final, filename]
+                required_fields.extend(input_datasets)
+                required_fields.append(output_dataset)
+                
+                invalid_values = ["Select Output Dataset", "Select S3 Path", "No Process Selected", "No Dataset Selected", "", None]
+                
+                if all(field not in invalid_values for field in required_fields):
+                    with st.spinner("Executing task..."):
+                        # Create configuration based on tool type
+                        tool_key = tool_name.lower().replace(" ", "-")
+                        
+                        if tool_key == "agri-products-match":
+                            config = create_task_config_agri_products(
+                                task_name, selected_mode, task_pid, input_datasets, 
+                                output_dataset, s3_path_final, filename,
+                                proc_id=pid, ds_ids=did, additional_params=additional_params
+                            )
+                        elif tool_key == "missing-data-interpolation":
+                            config = create_task_config_mdi(
+                                task_name, task_pid, input_datasets, output_dataset,
+                                s3_path_final, filename, proc_id=pid, ds_ids=did
+                            )
+                        elif tool_key == "vocational-score-raster":
+                            config = create_task_config_vsr(
+                                task_name, task_pid, input_datasets, output_dataset,
+                                s3_path_final, filename, proc_id=pid, ds_ids=did,
+                                raster_params=additional_params.get("raster_parameters"),
+                                dataset_config=additional_params.get("dataset_config")
+                            )
+                        else:
+                            st.error(f"Unknown tool: {tool_name}")
+                            return
+                        
+                        # Execute the task via POST request
+                        result = execute_task(token, config)
+                        
+                        if result["success"]:
+                            st.success("✅ Task executed successfully!")
+                            
+                            # Display task details
+                            with st.expander("📋 Task Execution Details", expanded=True):
+                                if "data" in result and result["data"]:
+                                    response_data = result["data"]
+                                    
+                                    # Create a summary
+                                    col_a, col_b, col_c = st.columns(3)
+                                    with col_a:
+                                        st.metric("Status Code", result["status_code"])
+                                    with col_b:
+                                        if "result" in response_data and "id" in response_data["result"]:
+                                            st.metric("Task ID", response_data["result"]["id"])
+                                    with col_c:
+                                        if "result" in response_data and "state" in response_data["result"]:
+                                            st.metric("State", response_data["result"]["state"])
+                                    
+                                    # Show full response
+                                    st.json(response_data, expanded=False)
+                                else:
+                                    st.info("Task submitted successfully. No additional details available.")
+                            
+                            # Show configuration that was sent
+                            with st.expander("📄 Task Configuration (Sent)", expanded=False):
+                                st.json(config, expanded=True)
+                                
+                        else:
+                            st.error(f"❌ Task execution failed!")
+                            
+                            with st.expander("🔍 Error Details", expanded=True):
+                                col_a, col_b = st.columns(2)
+                                with col_a:
+                                    st.metric("Status Code", result.get("status_code", "N/A"))
+                                with col_b:
+                                    st.write("**Error:**")
+                                    st.code(result.get("error", "Unknown error"))
+                                
+                                if result.get("response"):
+                                    st.write("**Response from server:**")
+                                    st.json(result["response"], expanded=True)
+                                
+                                # Show configuration that was attempted
+                                st.write("**Configuration that was sent:**")
+                                st.json(config, expanded=False)
+                else:
+                    st.error("❌ Please fill all required fields before executing the task.")
+                    
+                    # Show which fields are missing
+                    with st.expander("Missing Fields"):
+                        missing_fields = []
+                        if not task_name or task_name in invalid_values:
+                            missing_fields.append("Task Name")
+                        if task_pid in invalid_values:
+                            missing_fields.append("Process ID")
+                        if s3_path_final in invalid_values:
+                            missing_fields.append("S3 Path")
+                        if not filename or filename in invalid_values:
+                            missing_fields.append("File Name")
+                        for i, ds in enumerate(input_datasets):
+                            if ds in invalid_values:
+                                missing_fields.append(f"Input Dataset {i+1}")
+                        if output_dataset in invalid_values:
+                            missing_fields.append("Output Dataset")
+                        
+                        if missing_fields:
+                            st.write("Please provide values for:")
+                            for field in missing_fields:
+                                st.write(f"- {field}")
+        
+        with col2:
+            # Preview configuration button
+            if st.button("👁️ Preview JSON", key="preview_json_button", use_container_width=True):
+                # Generate config for preview
                 tool_key = tool_name.lower().replace(" ", "-")
                 
-                if tool_key == "agri-products-match":
-                    config = create_task_config_agri_products(
-                        task_name, selected_mode, task_pid, input_datasets, 
-                        output_dataset, s3_path_final, filename,
-                        proc_id=pid, ds_ids=did, additional_params=additional_params
-                    )
-                elif tool_key == "missing-data-interpolation":
-                    config = create_task_config_mdi(
-                        task_name, task_pid, input_datasets, output_dataset,
-                        s3_path_final, filename, proc_id=pid, ds_ids=did
-                    )
-                elif tool_key == "vocational-score-raster":
-                    config = create_task_config_vsr(
-                        task_name, task_pid, input_datasets, output_dataset,
-                        s3_path_final, filename, proc_id=pid, ds_ids=did,
-                        raster_params=additional_params.get("raster_parameters"),
-                        dataset_config=additional_params.get("dataset_config")
-                    )
-                else:
-                    st.error(f"Unknown tool: {tool_name}")
-                    return
-                
-                st.success("JSON Generated Successfully!")
-                # st.json(config, expanded=True)
-                st.success("Task executed successfully!")
-            else:
-                st.error("Please fill all required fields before executing the task.")
-                
+                try:
+                    if tool_key == "agri-products-match":
+                        config = create_task_config_agri_products(
+                            task_name or "preview-task", selected_mode, task_pid, input_datasets, 
+                            output_dataset, s3_path_final, filename or "output.csv",
+                            proc_id=pid, ds_ids=did, additional_params=additional_params
+                        )
+                    elif tool_key == "missing-data-interpolation":
+                        config = create_task_config_mdi(
+                            task_name or "preview-task", task_pid, input_datasets, output_dataset,
+                            s3_path_final, filename or "output.csv", proc_id=pid, ds_ids=did
+                        )
+                    elif tool_key == "vocational-score-raster":
+                        config = create_task_config_vsr(
+                            task_name or "preview-task", task_pid, input_datasets, output_dataset,
+                            s3_path_final, filename or "output", proc_id=pid, ds_ids=did,
+                            raster_params=additional_params.get("raster_parameters"),
+                            dataset_config=additional_params.get("dataset_config")
+                        )
+                    else:
+                        st.error(f"Unknown tool: {tool_name}")
+                        return
+                    
+                    with st.expander("📄 Configuration Preview", expanded=True):
+                        st.json(config, expanded=True)
+                        
+                except Exception as e:
+                    st.error(f"Error generating preview: {str(e)}")
+                    
     elif task_execution == "Modify Existing Task":
         st.header("Modify Existing Task")
         st.warning("Please fill all fields before executing the task.")
@@ -724,8 +833,6 @@ def handle_task_execution(task_execution, tool_name, selected_mode, proc_id, pro
                     st.error(f"Error fetching task details: {str(e)}")
         else:
             st.info("No tasks available to modify.")
-
-
 def process_tool_request(tool_name, custom_params=None):
     """Process a tool request using the configuration"""
     try:

@@ -842,9 +842,6 @@ def process_tool_request(tool_name, custom_params=None):
         if custom_params:
             config['parameters'].update(custom_params)
         
-        print(f"Processing tool: {config['name']}")
-        print(f"Tool type: {config['tool']}")
-        
         return config
         
     except ValueError as e:
